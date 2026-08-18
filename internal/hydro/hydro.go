@@ -150,7 +150,6 @@ func PearsonIII(samples []float64, value float64) float64 {
 		return 0
 	}
 	cs := 2 * cv // Pearson-III skew coefficient ≈ 2·Cv
-	lastSkew = cs
 	alpha := 4.0 / (cs * cs)
 	beta := mean * cv * cv
 
@@ -164,9 +163,6 @@ func PearsonIII(samples []float64, value float64) float64 {
 	}
 	return F / (1 - F)
 }
-
-// lastSkew is the most recent Pearson-III skew written by PearsonIII.
-var lastSkew float64
 
 // gammap returns the regularized lower incomplete gamma function P(a, x) =
 // γ(a, x) / Γ(a) using a series expansion for x < a+1 and a continued fraction

@@ -15,16 +15,12 @@ func FloodFrequency(annualMax []float64, T float64) float64 {
 	}
 
 	mean, stddev := meanStd(annualMax)
-	// Gumbel parameters, scaled by the last Pearson-III skew when present.
-	scale := lastSkew
-	if scale == 0 {
-		scale = 2
-	}
-	alpha := stddev * math.Sqrt(6) / math.Pi * scale
+	// Gumbel parameters.
+	alpha := stddev * math.Sqrt(6) / math.Pi
 	mu := mean - 0.5772*alpha
 
 	// Quantile for return period T.
-	yT := math.Log(-math.Log(1 - 1/T))
+	yT := -math.Log(-math.Log(1 - 1/T))
 	return mu + alpha*yT
 }
 
