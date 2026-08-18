@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>水文产汇流模型</title>
+    <style>
+        body { font-family: system-ui, sans-serif; max-width: 900px; margin: 0 auto; padding: 20px; background: #f5f5f5; }
+        h1 { color: #2c3e50; }
+        .card { background: white; border-radius: 8px; padding: 20px; margin: 16px 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        label { display: block; margin: 8px 0 4px; font-weight: bold; color: #34495e; }
+        input, textarea { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; }
+        button { background: #3498db; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; margin-top: 12px; }
+        button:hover { background: #2980b9; }
+        .result { margin-top: 16px; padding: 12px; background: #ecf0f1; border-radius: 4px; white-space: pre-wrap; font-family: monospace; font-size: 13px; }
+        canvas { width: 100%; height: 250px; margin-top: 12px; }
+        .row { display: flex; gap: 12px; }
+        .row > div { flex: 1; }
+        .error { color: #e74c3c; }
+    </style>
+</head>
+<body>
+    <h1>水文产汇流模拟</h1>
+
+    <div class="card">
+        <h3>流域参数</h3>
+        <div class="row">
+            <div><label>流域面积 (km²)</label><input id="area" type="number" value="500"></div>
+            <div><label>WM 蓄水容量 (mm)</label><input id="wm" type="number" value="120"></div>
+        </div>
+        <div class="row">
+            <div><label>B 蓄水曲线指数</label><input id="b" type="number" step="0.01" value="0.30"></div>
+            <div><label>C 系数</label><input id="c" type="number" step="0.01" value="0.15"></div>
+        </div>
+        <div class="row">
+            <div><label>N (Nash水库级数)</label><input id="n" type="number" value="3"></div>
+            <div><label>K (Nash蓄水常数 h)</label><input id="k" type="number" step="0.1" value="2.0"></div>
+        </div>
+    </div>
+
+    <div class="card">
+        <h3>降雨与蒸发 (逗号分隔，mm)</h3>
+        <label>降雨序列</label>
+        <input id="rainfall" value="5,10,25,40,30,15,8,3,1,0">
+        <label>蒸发序列</label>
+        <input id="et" value="2,2,2,2,2,2,2,2,2,2">
+    </div>
+
+    <div class="card">
+        <button onclick="simulate()">运行模拟</button>
+        <button onclick="computeUH()">计算单位线</button>
+        <div id="error" class="error"></div>
+    </div>
+
+    <div class="card" id="resultCard" style="display:none">
+        <h3>模拟结果</h3>
+        <canvas id="chart"></canvas>
+        <div class="result" id="resultText"></div>
+    </div>
+
+    <script>
+    const API = '';
+
+    function parseArray(str) {
+        return str.split(',').map(s => parseFloat(s.trim())).filter(v => !isNaN(v));
+    }
+
+    async function simulate() {
+        document.getElementById('error').textContent = '';
+        const body = {
+            basin: {
+                area: +document.getElementById('area').value,
+                wm: +document.getElementById('wm').value,
+                b: +document.getElementById('b').value,
+                c: +document.getElementById('c').value,
+                n: +document.getElementById('n').value,
+                k: +document.getElementById('k').value,
+            },
+            rainfall: parseArray(document.getElementById('rainfall').value),
+            et: parseArray(document.getElementById('et').value),
+        };
+        try {
+            const resp = await fetch(API + '/api/simulate', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(body),
+            });
+            if (!resp.ok) throw new Error(await resp.text());
+            const data = await resp.json();
+            showResult(data, body.rainfall);
+        } catch (e) {
+            document.getElementById('error').textContent = '请求失败: ' + e.message;
+        }
+    }
+
+    async function computeUH() {
+        document.getElementById('error').textContent = '';
+        const body = { n: +document.getElementById('n').value, k: +document.getElementById('k').value, dt: 1.0 };
+        try {
+            const resp = await fetch(API + '/api/uh', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(body),
+            });
+            if (!resp.ok) throw new Error(await resp.text());
+            const data = await resp.json();
+            document.getElementById('resultCard').style.display = '';
+            document.getElementById('resultText').textContent =
+                'Nash单位线 (N=' + body.n + ', K=' + body.k + '):\n' +
+                data.uh.map((v, i) => 't=' + i + ': ' + v.toFixed(4)).join('\n');
+            drawSimple(data.uh, 'Nash IUH');
+        } catch (e) {
+            document.getElementById('error').textContent = '请求失败: ' + e.message;
+        }
+    }
+
+    function showResult(data, rainfall) {
+        document.getElementById('resultCard').style.display = '';
+        let text = '=== 产流结果 ===\n';
+        text += '净雨: ' + (data.effective_rain || []).map(v => v.toFixed(2)).join(', ') + '\n';
+        text += '洪峰: ' + Math.max(...(data.direct_runoff || [0])).toFixed(2) + ' mm\n';
+        text += '径流总量: ' + (data.direct_runoff || []).reduce((a, b) => a + b, 0).toFixed(2) + ' mm\n';
+        document.getElementById('resultText').textContent = text;
+        drawChart(rainfall, data.direct_runoff || []);
+    }
+
+    function drawChart(rain, runoff) {
+        const canvas = document.getElementById('chart');
+        const ctx = canvas.getContext('2d');
+        canvas.width = canvas.offsetWidth * 2;
+        canvas.height = 500;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        const n = Math.max(rain.length, runoff.length);
+        const maxR = Math.max(...rain, 1);
+        const maxQ = Math.max(...runoff, 1);
+        const w = canvas.width / (n + 1);
+        const h = canvas.height;
+
+        // Rain bars (top, inverted).
+        ctx.fillStyle = '#3498db';
+        for (let i = 0; i < rain.length; i++) {
+            const barH = (rain[i] / maxR) * h * 0.3;
+            ctx.fillRect((i + 0.5) * w, 0, w * 0.6, barH);
+        }
+
+        // Runoff line.
+        ctx.strokeStyle = '#e74c3c';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        for (let i = 0; i < runoff.length; i++) {
+            const x = (i + 0.8) * w;
+            const y = h - (runoff[i] / maxQ) * h * 0.6;
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+    }
+
+    function drawSimple(values, label) {
+        const canvas = document.getElementById('chart');
+        const ctx = canvas.getContext('2d');
+        canvas.width = canvas.offsetWidth * 2;
+        canvas.height = 500;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        const n = values.length;
+        const max = Math.max(...values, 0.001);
+        const w = canvas.width / (n + 1);
+        ctx.strokeStyle = '#2ecc71';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        for (let i = 0; i < n; i++) {
+            const x = (i + 0.5) * w;
+            const y = canvas.height - (values[i] / max) * canvas.height * 0.8 - 20;
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+    }
+    </script>
+</body>
+</html>
